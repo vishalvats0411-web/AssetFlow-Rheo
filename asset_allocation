@@ -1,0 +1,1030 @@
+import React, { useState, useEffect, useContext, createContext, useMemo } from 'react';
+import { 
+  LayoutDashboard, Users, Box, ArrowRightLeft, CalendarClock, 
+  Wrench, ClipboardCheck, BarChart3, Bell, LogOut, Search, 
+  Plus, AlertCircle, CheckCircle2, Clock, X, ChevronRight, 
+  Calendar as CalendarIcon, ShieldAlert, FileText, Activity
+} from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
+  LineChart, Line
+} from 'recharts';
+
+// --- MOCK DATABASE & CONSTANTS ---
+const ROLES = {
+  ADMIN: 'Admin',
+  MANAGER: 'Asset Manager',
+  HEAD: 'Department Head',
+  EMPLOYEE: 'Employee'
+};
+
+const STATUSES = {
+  AVAILABLE: 'Available',
+  ALLOCATED: 'Allocated',
+  RESERVED: 'Reserved',
+  MAINTENANCE: 'Under Maintenance',
+  LOST: 'Lost',
+  RETIRED: 'Retired'
+};
+
+let mockDB = {
+  users: [
+    { id: 1, name: 'Alice Admin', email: 'admin@af.com', password: 'password', role: ROLES.ADMIN, departmentId: 1, status: 'Active' },
+    { id: 2, name: 'Bob Manager', email: 'manager@af.com', password: 'password', role: ROLES.MANAGER, departmentId: 2, status: 'Active' },
+    { id: 3, name: 'Charlie Head', email: 'head@af.com', password: 'password', role: ROLES.HEAD, departmentId: 3, status: 'Active' },
+    { id: 4, name: 'Dave Employee', email: 'emp@af.com', password: 'password', role: ROLES.EMPLOYEE, departmentId: 3, status: 'Active' },
+  ],
+  departments: [
+    { id: 1, name: 'IT & Operations', headUserId: 1, status: 'Active' },
+    { id: 2, name: 'Facilities', headUserId: 2, status: 'Active' },
+    { id: 3, name: 'Engineering', headUserId: 3, status: 'Active' },
+  ],
+  categories: [
+    { id: 1, name: 'Laptops', type: 'equipment' },
+    { id: 2, name: 'Vehicles', type: 'resource' },
+    { id: 3, name: 'Meeting Rooms', type: 'resource' },
+  ],
+  assets: [
+    { id: 1, tag: 'AF-1001', name: 'MacBook Pro M2', categoryId: 1, status: STATUSES.AVAILABLE, departmentId: 1, isBookable: false },
+    { id: 2, tag: 'AF-1002', name: 'Dell XPS 15', categoryId: 1, status: STATUSES.ALLOCATED, departmentId: 3, currentHolderId: 4, isBookable: false },
+    { id: 3, tag: 'AF-2001', name: 'Delivery Van A', categoryId: 2, status: STATUSES.AVAILABLE, departmentId: 2, isBookable: true },
+    { id: 4, tag: 'AF-3001', name: 'Conference Room Alpha', categoryId: 3, status: STATUSES.AVAILABLE, departmentId: 1, isBookable: true },
+    { id: 5, tag: 'AF-1005', name: 'ThinkPad T14', categoryId: 1, status: STATUSES.MAINTENANCE, departmentId: 1, isBookable: false },
+  ],
+  allocations: [
+    { id: 1, assetId: 2, holderId: 4, status: 'Active', date: '2023-10-01' }
+  ],
+  bookings: [
+    { id: 1, assetId: 4, bookedById: 3, start: '10:00', end: '11:00', date: '2023-10-26', status: 'Upcoming' }
+  ],
+  maintenance: [
+    { id: 1, assetId: 5, raisedById: 4, issue: 'Screen flickering', status: 'In Progress', priority: 'High' }
+  ],
+  logs: [
+    { id: 1, time: '10m ago', text: 'Dave Employee logged in.', type: 'info' }
+  ]
+};
+
+const generateId = () => Math.floor(Math.random() * 1000000);
+const logActivity = (text, type = 'info') => {
+  mockDB.logs.unshift({ id: generateId(), time: 'Just now', text, type });
+};
+
+// --- CONTEXT ---
+const AppContext = createContext();
+
+// --- UI COMPONENTS ---
+const Card = ({ children, className = '' }) => (
+  <div className={`bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden ${className}`}>
+    {children}
+  </div>
+);
+
+const Badge = ({ children, status }) => {
+  const colors = {
+    [STATUSES.AVAILABLE]: 'bg-green-100 text-green-800',
+    [STATUSES.ALLOCATED]: 'bg-blue-100 text-blue-800',
+    [STATUSES.MAINTENANCE]: 'bg-amber-100 text-amber-800',
+    'Pending': 'bg-yellow-100 text-yellow-800',
+    'Approved': 'bg-green-100 text-green-800',
+    'In Progress': 'bg-blue-100 text-blue-800',
+    'Resolved': 'bg-gray-100 text-gray-800',
+    'Active': 'bg-green-100 text-green-800',
+    'Inactive': 'bg-gray-100 text-gray-800',
+    'conflict': 'bg-red-100 text-red-800',
+  };
+  const defaultColor = 'bg-gray-100 text-gray-800';
+  return (
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${colors[status] || defaultColor}`}>
+      {children || status}
+    </span>
+  );
+};
+
+const Button = ({ children, variant = 'primary', className = '', ...props }) => {
+  const base = "inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2";
+  const variants = {
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500",
+    secondary: "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 focus:ring-indigo-500",
+    danger: "bg-red-600 text-white hover:bg-red-700 focus:ring-red-500",
+    ghost: "bg-transparent text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+  };
+  return (
+    <button className={`${base} ${variants[variant]} ${className}`} {...props}>
+      {children}
+    </button>
+  );
+};
+
+const Input = ({ label, className = '', ...props }) => (
+  <div className={className}>
+    {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+    <input className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" {...props} />
+  </div>
+);
+
+const Select = ({ label, options, className = '', ...props }) => (
+  <div className={className}>
+    {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+    <select className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-white" {...props}>
+      {options.map((opt, i) => <option key={i} value={opt.value}>{opt.label}</option>)}
+    </select>
+  </div>
+);
+
+// --- SCREENS ---
+
+const LoginSignup = ({ onLogin }) => {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setError('');
+    
+    if (isLogin) {
+      const user = mockDB.users.find(u => u.email === email && u.password === password);
+      if (user) {
+        logActivity(`${user.name} logged in.`);
+        onLogin(user);
+      } else {
+        setError('Invalid credentials. Use admin@af.com / password');
+      }
+    } else {
+      if (!email || !password || !name) {
+        setError('All fields required');
+        return;
+      }
+      const newUser = {
+        id: generateId(),
+        name, email, password,
+        role: ROLES.EMPLOYEE, // CRITICAL RULE ENFORCED HERE
+        status: 'Active'
+      };
+      mockDB.users.push(newUser);
+      logActivity(`New employee registered: ${name}`);
+      onLogin(newUser);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <Card className="max-w-md w-full p-8 space-y-8">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            {isLogin ? 'Sign in to AssetFlow' : 'Register for AssetFlow'}
+          </h2>
+        </div>
+        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+          {error && <div className="p-3 bg-red-50 text-red-700 rounded-md text-sm">{error}</div>}
+          
+          <div className="space-y-4">
+            {!isLogin && <Input label="Full Name" placeholder="Jane Doe" value={name} onChange={e => setName(e.target.value)} />}
+            <Input label="Email address" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <Input label="Password" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+
+          <Button type="submit" className="w-full">
+            {isLogin ? 'Sign In' : 'Create Account'}
+          </Button>
+        </form>
+
+        <div className="mt-6">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-300" /></div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white text-gray-500">
+                {isLogin ? 'New here?' : 'Already have an account?'}
+              </span>
+            </div>
+          </div>
+          <div className="mt-6 text-center">
+            <button onClick={() => setIsLogin(!isLogin)} className="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+              {isLogin ? 'Create an account' : 'Sign in instead'}
+            </button>
+            {!isLogin && (
+              <p className="mt-2 text-xs text-gray-500">
+                Note: Sign up creates an employee account. Admin roles are assigned later by IT.
+              </p>
+            )}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const Dashboard = () => {
+  const kpis = {
+    available: mockDB.assets.filter(a => a.status === STATUSES.AVAILABLE).length,
+    allocated: mockDB.assets.filter(a => a.status === STATUSES.ALLOCATED).length,
+    maintenance: mockDB.assets.filter(a => a.status === STATUSES.MAINTENANCE).length,
+    bookings: mockDB.bookings.length
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Today's Overview</h2>
+      
+      {/* Overdue Banner Mock */}
+      <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-md flex items-start">
+        <AlertCircle className="text-red-500 w-5 h-5 mr-3 mt-0.5" />
+        <div>
+          <h3 className="text-sm font-medium text-red-800">2 Assets Overdue for Return</h3>
+          <p className="text-sm text-red-700 mt-1">Please review the allocation reports to follow up.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { title: 'Available Assets', val: kpis.available, icon: Box, color: 'text-green-600', bg: 'bg-green-100' },
+          { title: 'Allocated', val: kpis.allocated, icon: Users, color: 'text-blue-600', bg: 'bg-blue-100' },
+          { title: 'Under Maintenance', val: kpis.maintenance, icon: Wrench, color: 'text-amber-600', bg: 'bg-amber-100' },
+          { title: 'Active Bookings', val: kpis.bookings, icon: CalendarClock, color: 'text-purple-600', bg: 'bg-purple-100' },
+        ].map((k, i) => (
+          <Card key={i} className="p-5 flex items-center space-x-4">
+            <div className={`p-3 rounded-lg ${k.bg}`}>
+              <k.icon className={`w-6 h-6 ${k.color}`} />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500 font-medium">{k.title}</p>
+              <p className="text-2xl font-bold text-gray-900">{k.val}</p>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-5">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Quick Actions</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="secondary" className="justify-start h-auto py-3"><Plus className="w-4 h-4 mr-2" /> Register Asset</Button>
+            <Button variant="secondary" className="justify-start h-auto py-3"><CalendarClock className="w-4 h-4 mr-2" /> Book Resource</Button>
+            <Button variant="secondary" className="justify-start h-auto py-3"><Wrench className="w-4 h-4 mr-2" /> Raise Request</Button>
+            <Button variant="secondary" className="justify-start h-auto py-3"><ArrowRightLeft className="w-4 h-4 mr-2" /> Transfer</Button>
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Activity</h3>
+          <div className="space-y-4">
+            {mockDB.logs.slice(0, 4).map(log => (
+              <div key={log.id} className="flex items-start space-x-3 text-sm">
+                <div className="mt-0.5"><Activity className="w-4 h-4 text-gray-400" /></div>
+                <div>
+                  <p className="text-gray-900">{log.text}</p>
+                  <p className="text-gray-500 text-xs">{log.time}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+const OrgSetup = () => {
+  const [activeTab, setActiveTab] = useState('employees');
+  const [users, setUsers] = useState(mockDB.users);
+
+  const handleRoleChange = (userId, newRole) => {
+    const updated = users.map(u => u.id === userId ? { ...u, role: newRole } : u);
+    setUsers(updated);
+    mockDB.users = updated;
+    logActivity(`Role updated for user ID ${userId} to ${newRole}`);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Organization Setup</h2>
+        <Button><Plus className="w-4 h-4 mr-2"/> Add New</Button>
+      </div>
+
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
+          {['employees', 'departments', 'categories'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`${activeTab === tab ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
+                whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm capitalize`}
+            >
+              {tab}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {activeTab === 'employees' && (
+        <Card>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {users.map(u => (
+                <tr key={u.id}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">{u.name}<br/><span className="text-gray-500 font-normal">{u.email}</span></td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {mockDB.departments.find(d => d.id === u.departmentId)?.name || '-'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {/* ONLY ADMIN CAN CHANGE ROLES HERE */}
+                    <select 
+                      value={u.role} 
+                      onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                      className="text-sm border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      {Object.values(ROLES).map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap"><Badge status={u.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* Placeholder for other tabs to keep file size reasonable while showing structure */}
+      {activeTab !== 'employees' && (
+        <div className="p-8 text-center text-gray-500 border-2 border-dashed border-gray-200 rounded-lg">
+          {activeTab} configuration table placeholder
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AssetDirectory = () => {
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const filteredAssets = mockDB.assets.filter(a => 
+    a.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    a.tag.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Asset Directory</h2>
+        <Button><Plus className="w-4 h-4 mr-2"/> Register Asset</Button>
+      </div>
+
+      <div className="flex space-x-4 mb-4">
+        <div className="relative flex-1 max-w-md">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search className="h-5 w-5 text-gray-400" />
+          </div>
+          <input
+            type="text"
+            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            placeholder="Search by tag or name..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <Select options={[{label: 'All Categories', value: ''}, ...mockDB.categories.map(c=>({label: c.name, value: c.id}))]} className="w-48" />
+        <Select options={[{label: 'All Statuses', value: ''}, ...Object.values(STATUSES).map(s=>({label: s, value: s}))]} className="w-48" />
+      </div>
+
+      <Card>
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tag</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset Name</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Department</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredAssets.map(a => (
+              <tr key={a.id} className="hover:bg-gray-50 cursor-pointer">
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-indigo-600">{a.tag}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{a.name}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {mockDB.categories.find(c => c.id === a.categoryId)?.name}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {mockDB.departments.find(d => d.id === a.departmentId)?.name || 'Unassigned'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap"><Badge status={a.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+};
+
+const AllocationTransfer = () => {
+  const [selectedAssetId, setSelectedAssetId] = useState('');
+  const [selectedAsset, setSelectedAsset] = useState(null);
+  const [transferTo, setTransferTo] = useState('');
+  const [reason, setReason] = useState('');
+  const [message, setMessage] = useState(null); // {type: 'error'|'success', text: ''}
+
+  useEffect(() => {
+    if (selectedAssetId) {
+      setSelectedAsset(mockDB.assets.find(a => a.id === parseInt(selectedAssetId)));
+      setMessage(null);
+    }
+  }, [selectedAssetId]);
+
+  const handleAction = () => {
+    if (!selectedAsset || !transferTo) return;
+
+    if (selectedAsset.status === STATUSES.ALLOCATED) {
+      // Simulate Transfer Request
+      setMessage({ type: 'success', text: 'Transfer request submitted for approval.' });
+      logActivity(`Transfer request submitted for ${selectedAsset.tag}`);
+    } else {
+      // Simulate Direct Allocation
+      const updatedAsset = { ...selectedAsset, status: STATUSES.ALLOCATED, currentHolderId: parseInt(transferTo) };
+      const idx = mockDB.assets.findIndex(a => a.id === selectedAsset.id);
+      mockDB.assets[idx] = updatedAsset;
+      mockDB.allocations.push({ id: generateId(), assetId: selectedAsset.id, holderId: parseInt(transferTo), status: 'Active', date: new Date().toISOString() });
+      setSelectedAsset(updatedAsset);
+      setMessage({ type: 'success', text: 'Asset allocated successfully.' });
+      logActivity(`Asset ${selectedAsset.tag} allocated to user ID ${transferTo}`);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Allocation & Transfer</h2>
+      
+      <Card className="p-6">
+        <div className="max-w-2xl space-y-6">
+          <Select 
+            label="Select Asset to Manage"
+            options={[{label: '-- Select an Asset --', value: ''}, ...mockDB.assets.filter(a => !a.isBookable).map(a => ({label: `${a.tag} - ${a.name}`, value: a.id}))]}
+            value={selectedAssetId}
+            onChange={(e) => setSelectedAssetId(e.target.value)}
+          />
+
+          {selectedAsset && (
+            <div className="mt-6 border-t pt-6 space-y-6">
+              {/* CORE RULE: DOUBLE ALLOCATION BLOCK UI */}
+              {selectedAsset.status === STATUSES.ALLOCATED && (
+                <div className="bg-red-50 border border-red-200 p-4 rounded-md flex items-start">
+                  <ShieldAlert className="text-red-600 w-5 h-5 mr-3 mt-0.5" />
+                  <div>
+                    <h3 className="text-sm font-medium text-red-800">Direct Allocation Blocked</h3>
+                    <p className="text-sm text-red-700 mt-1">
+                      This asset is currently allocated to {mockDB.users.find(u=>u.id === selectedAsset.currentHolderId)?.name}. 
+                      Submit a transfer request below instead.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {message && (
+                <div className={`p-4 rounded-md text-sm ${message.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                  {message.text}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select 
+                  label={selectedAsset.status === STATUSES.ALLOCATED ? "Transfer To (Employee)" : "Allocate To (Employee)"}
+                  options={[{label: '-- Select Employee --', value: ''}, ...mockDB.users.map(u => ({label: u.name, value: u.id}))]}
+                  value={transferTo}
+                  onChange={(e) => setTransferTo(e.target.value)}
+                />
+              </div>
+
+              {selectedAsset.status === STATUSES.ALLOCATED && (
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-gray-700">Reason for Transfer</label>
+                  <textarea 
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" 
+                    rows="3"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  ></textarea>
+                </div>
+              )}
+
+              <Button onClick={handleAction} disabled={!transferTo}>
+                {selectedAsset.status === STATUSES.ALLOCATED ? 'Submit Transfer Request' : 'Confirm Allocation'}
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card>
+      
+      {/* Allocation History */}
+      {selectedAsset && (
+        <Card className="p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Allocation History</h3>
+          <div className="flow-root">
+            <ul className="-mb-8">
+              {mockDB.allocations.filter(a => a.assetId === selectedAsset.id).map((alloc, idx, arr) => (
+                <li key={alloc.id}>
+                  <div className="relative pb-8">
+                    {idx !== arr.length - 1 ? <span className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-gray-200" aria-hidden="true"></span> : null}
+                    <div className="relative flex space-x-3">
+                      <div>
+                        <span className="h-8 w-8 rounded-full bg-indigo-50 flex items-center justify-center ring-8 ring-white">
+                          <Users className="h-4 w-4 text-indigo-600" />
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1 pt-1.5 flex justify-between space-x-4">
+                        <div>
+                          <p className="text-sm text-gray-500">
+                            Allocated to <span className="font-medium text-gray-900">{mockDB.users.find(u=>u.id===alloc.holderId)?.name}</span>
+                          </p>
+                        </div>
+                        <div className="text-right text-sm whitespace-nowrap text-gray-500">
+                          <time>{new Date(alloc.date).toLocaleDateString()}</time>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              ))}
+              {mockDB.allocations.filter(a => a.assetId === selectedAsset.id).length === 0 && (
+                <p className="text-sm text-gray-500">No previous allocation history.</p>
+              )}
+            </ul>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+const ResourceBooking = () => {
+  const { user } = useContext(AppContext);
+  const resources = mockDB.assets.filter(a => a.isBookable);
+  const [selectedResId, setSelectedResId] = useState(resources[0]?.id || '');
+  const [newBooking, setNewBooking] = useState({ start: 9, end: 10 }); // hours 9-17
+  const [conflict, setConflict] = useState(false);
+  const [bookings, setBookings] = useState(mockDB.bookings); // local state for reactivity
+
+  const resourceBookings = bookings.filter(b => b.assetId === parseInt(selectedResId));
+
+  // CORE RULE: BOOKING OVERLAP VALIDATION
+  useEffect(() => {
+    let hasConflict = false;
+    for (let b of resourceBookings) {
+      const bStart = parseInt(b.start.split(':')[0]);
+      const bEnd = parseInt(b.end.split(':')[0]);
+      // Overlap formula: newStart < existingEnd AND newEnd > existingStart
+      if (newBooking.start < bEnd && newBooking.end > bStart) {
+        hasConflict = true;
+        break;
+      }
+    }
+    setConflict(hasConflict);
+  }, [newBooking, selectedResId, bookings, resourceBookings]);
+
+  const handleBook = () => {
+    if (conflict) return;
+    const newB = {
+      id: generateId(),
+      assetId: parseInt(selectedResId),
+      bookedById: user.id,
+      start: `${newBooking.start}:00`,
+      end: `${newBooking.end}:00`,
+      date: '2023-10-26', // Mock fixed date for demo
+      status: 'Upcoming'
+    };
+    mockDB.bookings.push(newB);
+    setBookings([...mockDB.bookings]);
+    logActivity(`Resource booked: ${resources.find(r=>r.id===parseInt(selectedResId)).name}`);
+  };
+
+  const hours = Array.from({length: 9}, (_, i) => i + 9); // 9 AM to 5 PM
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Resource Booking</h2>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="p-6 col-span-1 space-y-6 h-fit">
+          <Select 
+            label="Select Resource"
+            options={resources.map(r => ({label: r.name, value: r.id}))}
+            value={selectedResId}
+            onChange={(e) => setSelectedResId(e.target.value)}
+          />
+
+          <div className="space-y-4 pt-4 border-t">
+            <h4 className="font-medium text-gray-900">New Booking</h4>
+            <div className="grid grid-cols-2 gap-4">
+              <Select 
+                label="Start Time"
+                options={hours.map(h => ({label: `${h}:00`, value: h}))}
+                value={newBooking.start}
+                onChange={(e) => setNewBooking({...newBooking, start: parseInt(e.target.value)})}
+              />
+              <Select 
+                label="End Time"
+                options={hours.map(h => ({label: `${h}:00`, value: h}))}
+                value={newBooking.end}
+                onChange={(e) => setNewBooking({...newBooking, end: parseInt(e.target.value)})}
+              />
+            </div>
+            
+            {conflict && (
+              <div className="p-3 bg-red-50 text-red-700 text-sm rounded-md border border-red-200 flex items-start">
+                <AlertCircle className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
+                Requested time slot conflicts with an existing booking.
+              </div>
+            )}
+
+            <Button className="w-full" disabled={conflict || newBooking.start >= newBooking.end} onClick={handleBook}>
+              Confirm Booking
+            </Button>
+          </div>
+        </Card>
+
+        <Card className="p-6 col-span-2">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-medium text-gray-900">Today's Schedule</h3>
+            <div className="text-sm text-gray-500 flex items-center"><CalendarIcon className="w-4 h-4 mr-2"/> Oct 26, 2023</div>
+          </div>
+          
+          {/* Simple Timeline View */}
+          <div className="relative border-l-2 border-gray-100 ml-4 pl-4 space-y-8 py-4">
+            {hours.slice(0,-1).map(hour => {
+              // Check if there's a booking starting at this hour
+              const b = resourceBookings.find(b => parseInt(b.start) === hour);
+              // Check if current new booking attempt overlaps this block for visualization
+              const isOverlapAttempt = conflict && (newBooking.start <= hour && newBooking.end > hour);
+
+              return (
+                <div key={hour} className="relative flex items-center">
+                  <div className="absolute -left-[25px] bg-white text-xs text-gray-400 py-1">{hour}:00</div>
+                  <div className="w-full border-t border-gray-100 absolute top-1/2 -z-10"></div>
+                  
+                  {b ? (
+                    <div className="ml-8 bg-indigo-100 border border-indigo-200 text-indigo-800 px-4 py-2 rounded-md w-full shadow-sm">
+                      <p className="text-sm font-medium">Booked by {mockDB.users.find(u=>u.id === b.bookedById)?.name}</p>
+                      <p className="text-xs text-indigo-600">{b.start} - {b.end}</p>
+                    </div>
+                  ) : isOverlapAttempt ? (
+                     <div className="ml-8 bg-red-50 border-2 border-dashed border-red-300 text-red-700 px-4 py-2 rounded-md w-full opacity-70">
+                       <p className="text-sm font-medium">Conflict - Unavailable</p>
+                     </div>
+                  ) : (
+                    <div className="ml-8 h-10 w-full hover:bg-gray-50 rounded-md transition-colors border border-transparent hover:border-gray-100 group flex items-center justify-center cursor-pointer" onClick={() => setNewBooking({start: hour, end: hour+1})}>
+                      <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100">Click to select</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+const MaintenanceBoard = () => {
+  const [requests, setRequests] = useState(mockDB.maintenance);
+  const columns = ['Pending', 'Approved', 'In Progress', 'Resolved'];
+
+  const moveRequest = (reqId, newStatus) => {
+    const updated = requests.map(r => r.id === reqId ? { ...r, status: newStatus } : r);
+    setRequests(updated);
+    mockDB.maintenance = updated;
+    logActivity(`Maintenance request ${reqId} moved to ${newStatus}`);
+
+    // CORE RULE: Maintenance status sync
+    if (newStatus === 'Approved' || newStatus === 'In Progress') {
+      const req = updated.find(r => r.id === reqId);
+      const assetIdx = mockDB.assets.findIndex(a => a.id === req.assetId);
+      if(assetIdx > -1) mockDB.assets[assetIdx].status = STATUSES.MAINTENANCE;
+    } else if (newStatus === 'Resolved') {
+       const req = updated.find(r => r.id === reqId);
+       const assetIdx = mockDB.assets.findIndex(a => a.id === req.assetId);
+       if(assetIdx > -1) mockDB.assets[assetIdx].status = STATUSES.AVAILABLE;
+    }
+  };
+
+  return (
+    <div className="space-y-6 h-full flex flex-col">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Maintenance Pipeline</h2>
+        <Button><Plus className="w-4 h-4 mr-2"/> Raise Request</Button>
+      </div>
+
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-6 overflow-x-auto pb-4">
+        {columns.map(col => (
+          <div key={col} className="bg-gray-50 rounded-lg p-4 min-w-[280px] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-700">{col}</h3>
+              <span className="bg-gray-200 text-gray-600 py-0.5 px-2 rounded-full text-xs font-medium">
+                {requests.filter(r => r.status === col).length}
+              </span>
+            </div>
+            
+            <div className="space-y-3 flex-1">
+              {requests.filter(r => r.status === col).map(req => {
+                const asset = mockDB.assets.find(a => a.id === req.assetId);
+                return (
+                  <div key={req.id} className="bg-white p-4 rounded-md shadow-sm border border-gray-200 cursor-default hover:shadow-md transition-shadow">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-1 rounded">{asset?.tag}</span>
+                      <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${req.priority === 'High' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {req.priority}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-900 font-medium mb-3">{req.issue}</p>
+                    
+                    {/* Action Buttons to simulate moving across pipeline */}
+                    <div className="flex space-x-2 border-t pt-3 mt-2">
+                      {col === 'Pending' && <Button variant="ghost" className="w-full text-xs bg-indigo-50 text-indigo-700" onClick={() => moveRequest(req.id, 'Approved')}>Approve</Button>}
+                      {col === 'Approved' && <Button variant="ghost" className="w-full text-xs bg-blue-50 text-blue-700" onClick={() => moveRequest(req.id, 'In Progress')}>Assign Tech</Button>}
+                      {col === 'In Progress' && <Button variant="ghost" className="w-full text-xs bg-green-50 text-green-700" onClick={() => moveRequest(req.id, 'Resolved')}>Resolve</Button>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const AssetAudit = () => {
+  const [cycleClosed, setCycleClosed] = useState(false);
+  const auditItems = mockDB.assets.filter(a => a.departmentId === 1); // Mock scope: Dept 1
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Active Audit Cycle</h2>
+          <p className="text-gray-500 text-sm mt-1">Scope: IT & Operations Dept | Oct 1 - Oct 30</p>
+        </div>
+        {!cycleClosed ? (
+          <Button onClick={() => setCycleClosed(true)}>Close Cycle</Button>
+        ) : (
+          <Badge status="Resolved">Cycle Closed</Badge>
+        )}
+      </div>
+
+      {cycleClosed && (
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-md flex items-start">
+          <FileText className="text-amber-600 w-5 h-5 mr-3 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-medium text-amber-800">Discrepancy Report Generated</h3>
+            <p className="text-sm text-amber-700 mt-1">1 item flagged as missing. A report has been saved to your files.</p>
+          </div>
+        </div>
+      )}
+
+      <Card>
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expected Location</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Verification</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {auditItems.map((a, i) => (
+              <tr key={a.id}>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">{a.tag} - {a.name}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">HQ - Floor 2</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  <Select 
+                    disabled={cycleClosed}
+                    options={[
+                      {label: 'Pending Check', value: ''},
+                      {label: 'Verified Present', value: 'verified'},
+                      {label: 'Missing', value: 'missing'},
+                      {label: 'Damaged', value: 'damaged'}
+                    ]}
+                    // Pre-fill some mock data for demo
+                    value={i === 0 ? 'verified' : (i===1 && cycleClosed ? 'missing' : '')} 
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+};
+
+const Reports = () => {
+  const utilData = [
+    { name: 'IT', allocated: 45, available: 12 },
+    { name: 'Engineering', allocated: 80, available: 5 },
+    { name: 'Facilities', allocated: 20, available: 30 },
+  ];
+  
+  const maintData = [
+    { month: 'Jan', requests: 10 },
+    { month: 'Feb', requests: 15 },
+    { month: 'Mar', requests: 8 },
+    { month: 'Apr', requests: 22 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Reports & Analytics</h2>
+        <Button variant="secondary"><FileText className="w-4 h-4 mr-2"/> Export CSV</Button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-6">Utilization by Department</h3>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={utilData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                <YAxis axisLine={false} tickLine={false} />
+                <RechartsTooltip cursor={{fill: '#F3F4F6'}} />
+                <Legend iconType="circle" />
+                <Bar dataKey="allocated" stackId="a" fill="#4F46E5" radius={[0, 0, 4, 4]} />
+                <Bar dataKey="available" stackId="a" fill="#E5E7EB" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-6">Maintenance Frequency</h3>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={maintData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} />
+                <YAxis axisLine={false} tickLine={false} />
+                <RechartsTooltip />
+                <Line type="monotone" dataKey="requests" stroke="#F59E0B" strokeWidth={3} dot={{r: 4, fill: '#F59E0B'}} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+const ActivityLogs = () => {
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Activity Logs & Notifications</h2>
+      
+      <Card>
+        <div className="divide-y divide-gray-200">
+          {mockDB.logs.map(log => (
+            <div key={log.id} className="p-4 hover:bg-gray-50 flex items-start space-x-4">
+              <div className="mt-1">
+                {log.type === 'alert' ? <ShieldAlert className="w-5 h-5 text-red-500" /> : <Bell className="w-5 h-5 text-indigo-500" />}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900">{log.text}</p>
+                <p className="text-xs text-gray-500 mt-1">{log.time}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+
+// --- MAIN APP COMPONENT ---
+
+export default function AssetFlowApp() {
+  const [user, setUser] = useState(null);
+  const [activeView, setActiveView] = useState('dashboard');
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
+
+  // Auto-login for faster preview/dev experience, comment out for real auth flow
+  // useEffect(() => { setUser(mockDB.users[0]); }, []);
+
+  if (!user) {
+    return <LoginSignup onLogin={setUser} />;
+  }
+
+  const NAV_ITEMS = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'org', label: 'Organization Setup', icon: Users, roles: [ROLES.ADMIN] },
+    { id: 'assets', label: 'Asset Directory', icon: Box },
+    { id: 'allocation', label: 'Allocation & Transfer', icon: ArrowRightLeft },
+    { id: 'booking', label: 'Resource Booking', icon: CalendarClock },
+    { id: 'maintenance', label: 'Maintenance', icon: Wrench },
+    { id: 'audit', label: 'Asset Audit', icon: ClipboardCheck },
+    { id: 'reports', label: 'Reports', icon: BarChart3 },
+    { id: 'logs', label: 'Activity Logs', icon: Bell },
+  ];
+
+  const visibleNavItems = NAV_ITEMS.filter(item => !item.roles || item.roles.includes(user.role));
+
+  const renderView = () => {
+    switch (activeView) {
+      case 'dashboard': return <Dashboard />;
+      case 'org': return <OrgSetup />;
+      case 'assets': return <AssetDirectory />;
+      case 'allocation': return <AllocationTransfer />;
+      case 'booking': return <ResourceBooking />;
+      case 'maintenance': return <MaintenanceBoard />;
+      case 'audit': return <AssetAudit />;
+      case 'reports': return <Reports />;
+      case 'logs': return <ActivityLogs />;
+      default: return <Dashboard />;
+    }
+  };
+
+  return (
+    <AppContext.Provider value={{ user, setActiveView }}>
+      <div className="flex h-screen bg-gray-50 font-sans text-gray-900 overflow-hidden">
+        
+        {/* SIDEBAR */}
+        <div className={`${isSidebarOpen ? 'w-64' : 'w-20'} flex-shrink-0 bg-white border-r border-gray-200 flex flex-col transition-all duration-300 z-10 relative`}>
+          <div className="h-16 flex items-center px-4 border-b border-gray-200 justify-between">
+            {isSidebarOpen && <span className="text-xl font-bold text-indigo-600 tracking-tight">AssetFlow</span>}
+            {!isSidebarOpen && <Box className="w-8 h-8 text-indigo-600 mx-auto" />}
+            <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 absolute -right-3 top-5 bg-white border border-gray-200 rounded-full shadow-sm">
+              <ChevronRight className={`w-4 h-4 transition-transform ${isSidebarOpen ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+          
+          <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+            {visibleNavItems.map(item => (
+              <button
+                key={item.id}
+                onClick={() => setActiveView(item.id)}
+                className={`w-full flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors group ${activeView === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100'}`}
+              >
+                <item.icon className={`flex-shrink-0 mr-3 h-5 w-5 ${activeView === item.id ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}`} />
+                {isSidebarOpen && item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="p-4 border-t border-gray-200">
+            <div className={`flex items-center ${!isSidebarOpen && 'justify-center'}`}>
+              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold flex-shrink-0">
+                {user.name.charAt(0)}
+              </div>
+              {isSidebarOpen && (
+                <div className="ml-3 flex-1 overflow-hidden">
+                  <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
+                  <p className="text-xs text-gray-500 truncate">{user.role}</p>
+                </div>
+              )}
+              {isSidebarOpen && (
+                <button onClick={() => setUser(null)} className="text-gray-400 hover:text-red-500 transition-colors">
+                  <LogOut className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* MAIN CONTENT AREA */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 sm:px-8">
+            <h1 className="text-xl font-semibold text-gray-800 capitalize">
+              {visibleNavItems.find(i => i.id === activeView)?.label || 'Dashboard'}
+            </h1>
+            <div className="flex items-center space-x-4">
+              <button className="text-gray-400 hover:text-gray-600 relative">
+                <Bell className="w-5 h-5" />
+                <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-400 ring-2 ring-white"></span>
+              </button>
+            </div>
+          </header>
+          
+          <main className="flex-1 overflow-auto p-6 sm:p-8">
+            <div className="max-w-7xl mx-auto h-full">
+              {renderView()}
+            </div>
+          </main>
+        </div>
+        
+      </div>
+    </AppContext.Provider>
+  );
+}
